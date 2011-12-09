@@ -34,6 +34,9 @@ function [MRS_struct] = MRSGABAfit(MRS_struct)
 %     can estimate this from confidence interval for nlinfit - need
 %               GABA and water estimates
 % 
+% 111209: Revert to water integral with linear baseline
+%         Initialise NLINFIT based on MINLSQFIT
+
 
 FIT_LSQCURV = 0;
 FIT_NLINFIT = 1;
@@ -44,15 +47,17 @@ waterfit_method = FIT_NLINFIT;
 GABAData=MRS_struct.gabaspec;
 freq=MRS_struct.freq;
 WaterData=MRS_struct.waterspec;
-MRS_struct.versionfit = '110624';
+MRS_struct.versionfit = '111209';
+disp(['GABA Fit Version is ' MRS_struct.versionfit ]);
 
 fitwater=1;
 numscans=size(GABAData); 
 numscans=numscans(1);
 
  %110624
- epsdirname = [ 'MRSfit_' datestr(clock,'yymmdd_HHMMSS') ];
-  
+ %epsdirname = [ 'MRSfit_' datestr(clock,'yymmdd_HHMMSS') ];
+ % 111209
+ epsdirname = [ 'MRSfit_' datestr(clock,'yymmdd') ];
 
 for ii=1:numscans
     MRS_struct.pfile{ii}
@@ -73,7 +78,7 @@ for ii=1:numscans
   freqbounds=lowerbound:upperbound;
   plotbounds=(lowerbound-150):(upperbound+150);
 
-  maxinGABA=max(real(GABAData(freqbounds)))
+  maxinGABA=max(real(GABAData(freqbounds)));
   %maxinGABA=1;
   resnorm=zeros([numscans size(freqbounds,2)]);
   %residuals=resnorm;
@@ -162,34 +167,43 @@ for ii=1:numscans
   
   % 110624 - linear baseline term removed - causes nlinfit to fail
   % sometimes
-  LGModelInit = [maxinWater 20 4.7  waterbase -50 ] %works
+  %LGModelInit = [maxinWater 20 4.7  waterbase -50 ] %works
+  % 111209 need to change order to get linear term back in 
+  % x(1) = Amplitude of (scaled) Lorentzian
+% x(2) = 1 / hwhm of Lorentzian (hwhm = half width at half max)
+% x(3) = centre freq of Lorentzian
+% x(4) = linear baseline amplitude
+% x(5) = constant baseline amplitude
+% x(6) =  -1 / 2 * sigma^2  of gaussian
+    LGModelInit = [maxinWater 20 4.7 0 waterbase -50 ]; %works
   
   lblg = [0.01*maxinWater 1 4.6 0 0 -50 ];
   ublg = [40*maxinWater 100 4.8 0.000001 1 0 ];
   freqbounds=15700:17100;
-  
  
   % Do the water fit (Lorentz-Gauss)
+  % 111209 Always do the LSQCURV fitting - to initialise
+  
+  %Lorentz-Gauss Starters
+  options = optimset('lsqcurvefit');
+  options = optimset(options,'Display','off','TolFun',1e-10,'Tolx',1e-10,'MaxIter',10000);
+  
+  % 110308 - change the plotting.  one plot per SCAN with GABA,
+  % water
+  fignum = 102;
+  figure(fignum)
+  [LGModelParam(ii,:),residual(ii), residw] = lsqcurvefit(@(xdummy,ydummy) ...
+      LorentzGaussModel(xdummy,ydummy),...
+      LGModelInit, freq(freqbounds),real(WaterData(ii,freqbounds)),...
+      lblg,ublg,options);
+  LGModelParam(ii,:)
+  
+  residw = -residw;
+  
   if(waterfit_method == FIT_LSQCURV)
-      
-      %Lorentz-Gauss Starters
-      options = optimset('lsqcurvefit');
-      options = optimset(options,'Display','off','TolFun',1e-10,'Tolx',1e-10,'MaxIter',10000);
-      
-      % 110308 - change the plotting.  one plot per SCAN with GABA,
-      % water
-      fignum = 102;
-      figure(fignum)
-      [LGModelParam(ii,:),residual(ii), residw] = lsqcurvefit(@(xdummy,ydummy) ...
-          LorentzGaussModel(xdummy,ydummy),...
-          LGModelInit, freq(freqbounds),real(WaterData(ii,freqbounds)),...
-          lblg,ublg,options);
-      LGModelInit;
-      LGModelParam(ii,:)
+      LGModelInit = LGModelParam; %111209 initialise from LSQCURV
 
-      residw = -residw;
-      
-  else %it's nlinfit
+      %it's nlinfit
       % nlinfit options
       nlinopts = statset('nlinfit');
       nlinopts = statset(nlinopts, 'MaxIter', 1e5);
@@ -197,13 +211,10 @@ for ii=1:numscans
       [LGModelParam(ii,:),residw] = nlinfit(freq(freqbounds), real(WaterData(ii,freqbounds)),...
           @(xdummy,ydummy)	LorentzGaussModel(xdummy,ydummy),...
           LGModelInit, nlinopts);
-      ii;
-      LGModelInit;
-      LGModelParam(ii,:)
-       residw = -residw;
+      residw = -residw;
   end
   
-      MRS_struct.WaterModelParam(ii,:) = LGModelParam(ii,:);
+  MRS_struct.WaterModelParam(ii,:) = LGModelParam(ii,:);
  
   subplot(2, 2, 3)
   
@@ -364,12 +375,11 @@ function F = LorentzGaussModel(x,freq)
 
 %F =((ones(size(freq))./(x(2)^2*(freq-x(3)).*(freq-x(3))+1)*x(1))*cos(x(7))+(ones(size(freq))./(x(2)^2*(freq-x(3)).*(freq-x(3))+1)*x(2).*(freq-x(3)))*sin(x(7))).*(exp(x(6)*(freq-x(3)).*(freq-x(3))))+x(4)*(freq-x(3))+x(5);
 % remove phasing
+% 111209 - linear term back in (cf 110624)
 F = (x(1)*ones(size(freq))./(x(2)^2*(freq-x(3)).*(freq-x(3))+1))  ... 
-    .* (exp(x(5)*(freq-x(3)).*(freq-x(3)))) ... % gaussian
-    +x(4); % constant baseline
-
-    % 110624 removed:
-    % + x(4)*(freq-x(3)) ... % linear baseline
+    .* (exp(x(6)*(freq-x(3)).*(freq-x(3)))) ... % gaussian
+    + x(4)*(freq-x(3)) ... % linear baseline
+    +x(5); % constant baseline
 
     
 %%%%%%%%%%%%%%% BASELINE %%%%%%%%%%%%%%%%%%%%%%%
