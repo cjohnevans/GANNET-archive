@@ -93,20 +93,20 @@ for ii=1:numscans
   lb = [0 -200 2.9 -40*maxinGABA -2000*maxinGABA];
   ub = [4000*maxinGABA -40 3.15 40*maxinGABA 1000*maxinGABA];
   
-  if(fit_method == FIT_LSQCURV)
-      
-      options = optimset('lsqcurvefit');
-      options = optimset(options,'Display','off','TolFun',1e-10,'Tolx',1e-10,'MaxIter',1e5);
-      
-      % pass function handle to GaussModel to lsqcurvefit
-      [GaussModelParam(ii,:),resnorm(ii), residg] = lsqcurvefit(@(xdummy,ydummy) GaussModel(xdummy,ydummy), ...
-          GaussModelInit, ...
-          freq(freqbounds),...
-          real(GABAData(ii,freqbounds)), ...
-          lb,ub,options);
-      residg = -residg;
-      
-  else  % it's FIT_NLINFIT
+  % 111209 Always run LSQ to initialise    
+  options = optimset('lsqcurvefit');
+  options = optimset(options,'Display','off','TolFun',1e-10,'Tolx',1e-10,'MaxIter',1e5);
+  
+  % pass function handle to GaussModel to lsqcurvefit
+  [GaussModelParam(ii,:),resnorm(ii), residg] = lsqcurvefit(@(xdummy,ydummy) GaussModel(xdummy,ydummy), ...
+      GaussModelInit, ...
+      freq(freqbounds),...
+      real(GABAData(ii,freqbounds)), ...
+      lb,ub,options);
+  residg = -residg;
+  
+  if(fit_method == FIT_NLINFIT)
+      GaussModelInit = GaussModelParam(ii,:); %111209
       nlinopts = statset('nlinfit');
       nlinopts = statset(nlinopts, 'MaxIter', 1e5);
       
@@ -356,14 +356,10 @@ function F = LorentzGaussModel(x,freq)
 % CJE 24Nov10 - removed phase term from fit - this is now dealt with
 % by the phasing of the water ref scans in MRSLoadPfiles
 %Lorentzian Model multiplied by a Gaussian.  
-% x(1) = Amplitude of (scaled) Lorentzian
+  % 111209 need to change order to get linear term back in 
+  % x(1) = Amplitude of (scaled) Lorentzian
 % x(2) = 1 / hwhm of Lorentzian (hwhm = half width at half max)
 % x(3) = centre freq of Lorentzian
-% x(4) = constant baseline amplitude
-% x(5) =  -1 / 2 * sigma^2  of gaussian
-
-% 110624; remove linear baseline term
-% OBSOLETE:
 % x(4) = linear baseline amplitude
 % x(5) = constant baseline amplitude
 % x(6) =  -1 / 2 * sigma^2  of gaussian
