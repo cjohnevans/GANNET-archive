@@ -22,7 +22,6 @@ function [MRS_struct] = MRSGABAfit(MRS_struct)
 %     Include FIXED version of Lorentzian fitting
 %     Get Navg from struct (use v110303, or above, of MRSLoadPfiles)
 %     rejig the output plots - one fig per scan. 
-%
 % 110624:   ** RELEASED ON 2 AUG 2011 (MRS WORKSHOP) **
 %%%%%%%%%%%%%%%%%%%%% BUG: BaselineModel wrong for water integral****************
 %     Default: NLINFIT for GABA and Water
@@ -32,25 +31,19 @@ function [MRS_struct] = MRSGABAfit(MRS_struct)
 %     linear term removed from LorentzGauss fit - caused failures.
 %     report fit error (100*stdev(resid)/gabaheight), rather than "SNR"
 %     can estimate this from confidence interval for nlinfit - need
-%               GABA and water estimates
-% 
+%               GABA and water estimates 
 % 111209: Revert to water integral with linear baseline
 %         Initialise NLINFIT based on MINLSQFIT
-
-
-FIT_LSQCURV = 0;
-FIT_NLINFIT = 1;
-
-fit_method = FIT_NLINFIT;
-waterfit_method = FIT_NLINFIT;
+% 111212: Fix water integral error calc
+%         include raw integral calculation for water.
+%         loop over 100 fits of gaba params
 
 GABAData=MRS_struct.gabaspec;
 freq=MRS_struct.freq;
 WaterData=MRS_struct.waterspec;
-MRS_struct.versionfit = '111209';
+MRS_struct.versionfit = '111212';
 disp(['GABA Fit Version is ' MRS_struct.versionfit ]);
 
-fitwater=1;
 numscans=size(GABAData); 
 numscans=numscans(1);
 
@@ -84,11 +77,6 @@ for ii=1:numscans
   %residuals=resnorm;
   size(resnorm);
   GaussModelInit = [10*maxinGABA -90 3.026 0 0];
-  %GaussModelInit = [4.1314 -140.0000 3.0005 -0.8776 0.5684]; %from MINLSQ 
-  %GaussModelInit = [1 -140.0000 3.0005 -0.8776 0.5684]; %works
-  %GaussModelInit = [maxinGABA -90 3.026 0 0]; %works
-  %GaussModelInit = [ 1 -90 3.026 0 0]; %fails
-  %GaussModelInit = [ 1 -90 3.026 -0.8776 0.5684]; %works
   
   lb = [0 -200 2.9 -40*maxinGABA -2000*maxinGABA];
   ub = [4000*maxinGABA -40 3.15 40*maxinGABA 1000*maxinGABA];
@@ -105,7 +93,7 @@ for ii=1:numscans
       lb,ub,options);
   residg = -residg;
   
-  if(fit_method == FIT_NLINFIT)
+  for fit_iter = 1:100 % 111212 - loop to ensure convergence, generally converged with in 10 iterations
       GaussModelInit = GaussModelParam(ii,:); %111209
       nlinopts = statset('nlinfit');
       nlinopts = statset(nlinopts, 'MaxIter', 1e5);
@@ -156,18 +144,10 @@ for ii=1:numscans
   
   
   %%%%%%%%%%%%%% Water Fit %%%%%%%%%%%%%%%%%%
-  T1=20;
-  %LGModelInit = [1500 T1 4.6845 0 0 -10*T1 ];
-  % overestimating amplitude seems to work better...
-  %LGModelInit = [20*maxinWater 10*T1 4.6845 0 0 -10*T1 ];
-  %LGModelInit = [3000 200 4.8 0 1 -50 ]; %fails
   %estimate height and baseline from data
   maxinWater=max(real(WaterData(:)));
   waterbase = mean(real(WaterData(1:500))); % avg
   
-  % 110624 - linear baseline term removed - causes nlinfit to fail
-  % sometimes
-  %LGModelInit = [maxinWater 20 4.7  waterbase -50 ] %works
   % 111209 need to change order to get linear term back in 
   % x(1) = Amplitude of (scaled) Lorentzian
 % x(2) = 1 / hwhm of Lorentzian (hwhm = half width at half max)
@@ -180,10 +160,9 @@ for ii=1:numscans
   lblg = [0.01*maxinWater 1 4.6 0 0 -50 ];
   ublg = [40*maxinWater 100 4.8 0.000001 1 0 ];
   freqbounds=15700:17100;
- 
-  % Do the water fit (Lorentz-Gauss)
-  % 111209 Always do the LSQCURV fitting - to initialise
   
+  % Do the water fit (Lorentz-Gauss)
+  % 111209 Always do the LSQCURV fitting - to initialise 
   %Lorentz-Gauss Starters
   options = optimset('lsqcurvefit');
   options = optimset(options,'Display','off','TolFun',1e-10,'Tolx',1e-10,'MaxIter',10000);
@@ -196,23 +175,22 @@ for ii=1:numscans
       LorentzGaussModel(xdummy,ydummy),...
       LGModelInit, freq(freqbounds),real(WaterData(ii,freqbounds)),...
       lblg,ublg,options);
-  LGModelParam(ii,:)
-  
   residw = -residw;
+  LGModelInit = LGModelParam(ii,:); %111209 initialise from LSQCURV
   
-  if(waterfit_method == FIT_LSQCURV)
-      LGModelInit = LGModelParam; %111209 initialise from LSQCURV
-
-      %it's nlinfit
-      % nlinfit options
-      nlinopts = statset('nlinfit');
-      nlinopts = statset(nlinopts, 'MaxIter', 1e5);
-      
-      [LGModelParam(ii,:),residw] = nlinfit(freq(freqbounds), real(WaterData(ii,freqbounds)),...
-          @(xdummy,ydummy)	LorentzGaussModel(xdummy,ydummy),...
-          LGModelInit, nlinopts);
-      residw = -residw;
-  end
+  % nlinfit options
+  nlinopts = statset('nlinfit');
+  nlinopts = statset(nlinopts, 'MaxIter', 1e5);
+  
+  [LGModelParam(ii,:),residw] = nlinfit(freq(freqbounds), real(WaterData(ii,freqbounds)),...
+      @(xdummy,ydummy)	LorentzGaussModel(xdummy,ydummy),...
+      LGModelInit, nlinopts);
+  
+  LGModelInit = LGModelParam(ii,:); %111212 run twice
+  [LGModelParam(ii,:),residw] = nlinfit(freq(freqbounds), real(WaterData(ii,freqbounds)),...
+      @(xdummy,ydummy)	LorentzGaussModel(xdummy,ydummy),...
+      LGModelInit, nlinopts);
+  residw = -residw;
   
   MRS_struct.WaterModelParam(ii,:) = LGModelParam(ii,:);
  
@@ -223,8 +201,8 @@ for ii=1:numscans
   %  resid = -resid;   % set resid to data-fit rather than fit-data
   resmax = max(residw);
   residw = residw + watmin - resmax;
-  stdevresidw=std(residw);
-  MRS_struct.WaterFitError(ii)  =  100 * std(residg) / waterheight;
+  %111212 - fix water error calc
+  MRS_struct.WaterFitError(ii)  =  100 * std(residw) / waterheight;
   MRS_struct.GABAIU_Error = (MRS_struct.GABAFitError .^ 2 + ...
       MRS_struct.WaterFitError .^ 2 ) .^ 0.5;
   
@@ -240,7 +218,11 @@ for ii=1:numscans
   Baseline(ii,:)=BaselineModel(baselineparams,freq(freqbounds));
   WaterArea(ii)=sum(real(LorentzGaussModel(LGModelParam(ii,:),freq(freqbounds))) ...
       - BaselineModel(LGModelParam(ii,3:5),freq(freqbounds)),2);
-  
+
+  %111212 - estimate baseline and demean water, for raw integral calc 
+  baseline_est = mean([ mean(real(WaterData(ii,1:501))) mean(real(WaterData(ii,32178:32678))) ]);
+  WaterDemean = real(WaterData(ii,:)) - baseline_est;
+  MRS_struct.waterAreaIntegration(ii) = sum(WaterDemean) .* (freq(1) - freq(2));
   
   % convert watersum to integral
   MRS_struct.waterArea(ii)=WaterArea(ii) * (freq(1) - freq(2));
@@ -284,18 +266,6 @@ for ii=1:numscans
   tmp = sprintf('%.2f, %.2f',  MRS_struct.phase(ii),  MRS_struct.phase_firstorder(ii) );
   tmp =        ['Phase  \phi_0,\phi_1 :' tmp];
   text(0, 0.2, tmp, 'FontName', 'Courier');
-  if fit_method == FIT_NLINFIT
-      tmp = 'NLINFIT, ';
-  else
-      tmp = 'LSQCURVEFIT, ';
-  end
-  if waterfit_method == FIT_NLINFIT
-      tmp = [tmp 'NLINFIT'];
-  else
-      tmp = [tmp 'LSQCURVEFIT' ];
-  end
-  tmp =        ['GABA, Water fit alg. :' tmp];
-  text(0,-0.1, tmp, 'FontName', 'Courier');
   
   %%%%  Save EPS %%%%%
   pfil_nopath = MRS_struct.pfile{ii};
